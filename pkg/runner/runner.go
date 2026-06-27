@@ -761,6 +761,11 @@ func (r *Runner) logCertInfo(entry *ct.RawLogEntry) {
 		if len(r.rootDomains) == 0 {
 			if r.options.JsonOutput {
 				utils.JsonOutput(parsedEntry.X509Cert)
+			} else if r.options.CompactJson {
+				r.smallOutput(parsedEntry.X509Cert.Subject.CommonName)
+				for _, domain := range parsedEntry.X509Cert.DNSNames {
+					r.smallOutput(domain)
+				}
 			} else {
 				fmt.Println(parsedEntry.X509Cert.Subject.CommonName)
 				for _, domain := range parsedEntry.X509Cert.DNSNames {
@@ -771,6 +776,8 @@ func (r *Runner) logCertInfo(entry *ct.RawLogEntry) {
 			if utils.IsSubdomain(parsedEntry.X509Cert.Subject.CommonName, r.rootDomains) {
 				if r.options.JsonOutput {
 					utils.JsonOutput(parsedEntry.X509Cert)
+				} else if r.options.CompactJson {
+					r.smallOutput(parsedEntry.X509Cert.Subject.CommonName)
 				} else {
 					fmt.Println(parsedEntry.X509Cert.Subject.CommonName)
 				}
@@ -779,6 +786,8 @@ func (r *Runner) logCertInfo(entry *ct.RawLogEntry) {
 				if utils.IsSubdomain(domain, r.rootDomains) {
 					if r.options.JsonOutput {
 						utils.JsonOutput(parsedEntry.X509Cert)
+					} else if r.options.CompactJson {
+						r.smallOutput(domain)
 					} else {
 						fmt.Println(domain)
 					}
@@ -843,6 +852,11 @@ func (r *Runner) logPrecertInfo(entry *ct.RawLogEntry) {
 		if len(r.rootDomains) == 0 {
 			if r.options.JsonOutput {
 				utils.JsonOutput(parsedEntry.Precert.TBSCertificate)
+			} else if r.options.CompactJson {
+				r.smallOutput(parsedEntry.Precert.TBSCertificate.Subject.CommonName)
+				for _, domain := range parsedEntry.Precert.TBSCertificate.DNSNames {
+					r.smallOutput(domain)
+				}
 			} else {
 				fmt.Println(parsedEntry.Precert.TBSCertificate.Subject.CommonName)
 				for _, domain := range parsedEntry.Precert.TBSCertificate.DNSNames {
@@ -853,6 +867,8 @@ func (r *Runner) logPrecertInfo(entry *ct.RawLogEntry) {
 			if utils.IsSubdomain(parsedEntry.Precert.TBSCertificate.Subject.CommonName, r.rootDomains) {
 				if r.options.JsonOutput {
 					utils.JsonOutput(parsedEntry.Precert.TBSCertificate)
+				} else if r.options.CompactJson {
+					r.smallOutput(parsedEntry.Precert.TBSCertificate.Subject.CommonName)
 				} else {
 					fmt.Println(parsedEntry.Precert.TBSCertificate.Subject.CommonName)
 				}
@@ -861,6 +877,8 @@ func (r *Runner) logPrecertInfo(entry *ct.RawLogEntry) {
 				if utils.IsSubdomain(domain, r.rootDomains) {
 					if r.options.JsonOutput {
 						utils.JsonOutput(parsedEntry.Precert.TBSCertificate)
+					} else if r.options.CompactJson {
+						r.smallOutput(domain)
 					} else {
 						fmt.Println(domain)
 					}
