@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -61,20 +62,33 @@ func (r *Runner) loadRootDomains() error {
 		return nil
 	}
 
-	file, err := os.Open(r.options.RootList)
-	if err != nil {
-		return fmt.Errorf("failed to open root domains file: %v", err)
+	var input io.Reader
+	if r.options.RootList == "-" {
+		input = os.Stdin
+	} else {
+		file, err := os.Open(r.options.RootList)
+		if err != nil {
+			return fmt.Errorf("failed to open root domains file: %v", err)
+		}
+		defer file.Close()
+		input = file
 	}
-	defer file.Close()
 
 	r.rootDomains = make(map[string]bool)
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(input)
 	for scanner.Scan() {
-		r.rootDomains[scanner.Text()] = true
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		// Support wildcard syntax like "*.se" — strip the leading "*." so the
+		// existing label-suffix matcher treats it as a root to match against.
+		line = strings.TrimPrefix(line, "*.")
+		r.rootDomains[line] = true
 	}
 
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading root domains file: %v", err)
+		return fmt.Errorf("error reading root domains: %v", err)
 	}
 
 	return nil
@@ -536,6 +550,8 @@ func (r *Runner) outputStaticDomain(domain string, entry *sunlight.TrimmedEntry)
 		// No filtering, output all domains
 		if r.options.JsonOutput {
 			r.outputStaticJson(entry)
+		} else if r.options.CompactJson {
+			r.smallOutput(domain)
 		} else {
 			fmt.Println(domain)
 		}
@@ -544,6 +560,8 @@ func (r *Runner) outputStaticDomain(domain string, entry *sunlight.TrimmedEntry)
 		if utils.IsSubdomain(domain, r.rootDomains) {
 			if r.options.JsonOutput {
 				r.outputStaticJson(entry)
+			} else if r.options.CompactJson {
+				r.smallOutput(domain)
 			} else {
 				fmt.Println(domain)
 			}
@@ -564,6 +582,19 @@ func (r *Runner) outputStaticJson(entry *sunlight.TrimmedEntry) {
 	if err != nil {
 		if r.options.Verbose {
 			log.Printf("Error marshaling JSON for %s: %v", entry.Subject.CommonName, err)
+		}
+		return
+	}
+	fmt.Println(string(jsonData))
+}
+func (r *Runner) smallOutput(domain string) {
+	host := types.CompatOutput{
+		Host: domain,
+	}
+	jsonData, err := json.Marshal(host)
+	if err != nil {
+		if r.options.Verbose {
+			log.Printf("Error marshaling JSON for %s: %v", domain, err)
 		}
 		return
 	}

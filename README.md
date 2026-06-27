@@ -1,3 +1,5 @@
+echo '*.se' | gungnir -r -          # all .se domains
+
 # Gungnir
 In Norse mythology, Gungnir is the spear of the god Odin. It is known for always hitting the target of the attacker regardless of the attacker's skill.
 ## Description

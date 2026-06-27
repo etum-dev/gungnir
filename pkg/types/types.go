@@ -35,6 +35,9 @@ type CertificateInfo struct {
 	Domains      []string `json:"domains"`
 	Source       string   `json:"source"`
 }
+type CompatOutput struct {
+	Host string `json:"host"`
+}
 
 type GungnirMessage struct {
 	Domain string
