@@ -21,7 +21,7 @@ import (
 	"github.com/g0ldencybersec/gungnir/pkg/utils"
 	ct "github.com/google/certificate-transparency-go"
 	"github.com/google/certificate-transparency-go/x509"
-	"github.com/nats-io/nats.go"
+	rmq "github.com/rabbitmq/rabbitmq-amqp-go-client/pkg/rabbitmqamqp"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/g0ldencybersec/gungnir/pkg/types"
@@ -49,8 +49,10 @@ type Runner struct {
 	watcher          *fsnotify.Watcher
 	restartChan      chan struct{}
 	outputMutex      sync.Mutex
-	natsPub          bool
-	natsConn         *nats.Conn
+	rabbitPub        bool
+	rabbitEnv        *rmq.Environment
+	rabbitConn       *rmq.AmqpConnection
+	rabbitPublisher  *rmq.Publisher
 	actorPID         *actor.PID
 	useActor         bool
 	actorEngine      *actor.Engine
@@ -164,20 +166,6 @@ func NewRunner(options *Options) (*Runner, error) {
 		runner.staticLogClients = []types.StaticCtLog{}
 	}
 
-	// NATS setup if needed
-	if runner.options.NatsSubject != "" && runner.options.NatsUrl != "" && runner.options.NatsCredFile != "" {
-		nc, err := nats.Connect(runner.options.NatsUrl, nats.UserCredentials(runner.options.NatsCredFile))
-		if err != nil {
-			return nil, fmt.Errorf("failed to make nats connectoin: %v", err)
-		}
-
-		runner.natsConn = nc
-		runner.natsPub = true
-	} else {
-		runner.natsConn = nil
-		runner.natsPub = false
-	}
-
 	if runner.options.ActorPID != nil {
 		runner.useActor = true
 		runner.actorPID = runner.options.ActorPID
@@ -192,6 +180,35 @@ func NewRunner(options *Options) (*Runner, error) {
 				return nil, fmt.Errorf("failed to create actor engine: %v", err)
 			}
 		}
+	}
+
+	// Optional RabbitMQ setup. When a broker URI is provided, matching domains
+	// are published to the configured queue instead of stdout.
+	if runner.options.RabbitBroker != "" {
+		ctx := context.Background()
+		queue := runner.options.RabbitQueue
+
+		env := rmq.NewEnvironment(runner.options.RabbitBroker, nil)
+		conn, err := env.NewConnection(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to RabbitMQ: %v", err)
+		}
+
+		if _, err := conn.Management().DeclareQueue(ctx, &rmq.QuorumQueueSpecification{Name: queue}); err != nil {
+			_ = env.CloseConnections(ctx)
+			return nil, fmt.Errorf("failed to declare RabbitMQ queue %q: %v", queue, err)
+		}
+
+		publisher, err := conn.NewPublisher(ctx, &rmq.QueueAddress{Queue: queue}, nil)
+		if err != nil {
+			_ = env.CloseConnections(ctx)
+			return nil, fmt.Errorf("failed to create RabbitMQ publisher: %v", err)
+		}
+
+		runner.rabbitEnv = env
+		runner.rabbitConn = conn
+		runner.rabbitPublisher = publisher
+		runner.rabbitPub = true
 	}
 
 	runner.entryTasksChan = make(chan types.EntryTask, len(runner.logClients)*100)
@@ -229,8 +246,40 @@ func (r *Runner) Run() {
 	if r.watcher != nil {
 		r.watcher.Close()
 	}
-	r.natsConn.Close()
+	if r.rabbitPub {
+		ctx := context.Background()
+		if r.rabbitPublisher != nil {
+			_ = r.rabbitPublisher.Close(ctx)
+		}
+		if r.rabbitEnv != nil {
+			_ = r.rabbitEnv.CloseConnections(ctx)
+		}
+	}
 	fmt.Fprintf(os.Stderr, "Gracefully shutdown all routines\n")
+}
+
+// publishRabbit sends a single domain to the configured RabbitMQ queue.
+//
+// Publishing is asynchronous: PublishAsync returns as soon as the message is
+// handed to the broker, and the confirmation is awaited on a background
+// goroutine that reports failures through the callback. The publisher's
+// MaxInFlight bound (default 256) caps the number of pending confirmations, so
+// this call blocks for backpressure rather than buffering the CT firehose
+// unboundedly.
+func (r *Runner) publishRabbit(domain string) {
+	err := r.rabbitPublisher.PublishAsync(context.Background(), rmq.NewMessage([]byte(domain)),
+		func(res *rmq.PublishResult, err error) {
+			if err != nil {
+				log.Printf("Error publishing %s to RabbitMQ: %v", domain, err)
+				return
+			}
+			if _, ok := res.Outcome.(*rmq.StateAccepted); !ok {
+				log.Printf("RabbitMQ publish not accepted for %s: %v", domain, res.Outcome)
+			}
+		})
+	if err != nil {
+		log.Printf("Error publishing %s to RabbitMQ: %v", domain, err)
+	}
 }
 
 func (r *Runner) startScan(ctx context.Context, wg *sync.WaitGroup) {
@@ -534,13 +583,10 @@ func (r *Runner) outputStaticDomain(domain string, entry *sunlight.TrimmedEntry)
 		return
 	}
 
-	// Handle NATS mode
-	if r.natsPub {
+	// Handle RabbitMQ mode
+	if r.rabbitPub {
 		if utils.IsSubdomain(domain, r.rootDomains) {
-			err := r.natsConn.Publish(r.options.NatsSubject, []byte(domain))
-			if err != nil {
-				log.Printf("Error writing to NATs: %v", err)
-			}
+			r.publishRabbit(domain)
 		}
 		return
 	}
@@ -741,19 +787,13 @@ func (r *Runner) logCertInfo(entry *ct.RawLogEntry) {
 				r.actorEngine.Send(r.actorPID, &types.GungnirMessage{Domain: domain})
 			}
 		}
-	} else if r.natsPub {
+	} else if r.rabbitPub {
 		if utils.IsSubdomain(parsedEntry.X509Cert.Subject.CommonName, r.rootDomains) {
-			err := r.natsConn.Publish(r.options.NatsSubject, []byte(parsedEntry.X509Cert.Subject.CommonName))
-			if err != nil {
-				log.Printf("Error writing to NATs: %v", err)
-			}
+			r.publishRabbit(parsedEntry.X509Cert.Subject.CommonName)
 		}
 		for _, domain := range parsedEntry.X509Cert.DNSNames {
 			if utils.IsSubdomain(domain, r.rootDomains) {
-				err := r.natsConn.Publish(r.options.NatsSubject, []byte(domain))
-				if err != nil {
-					log.Printf("Error writing to NATs: %v", err)
-				}
+				r.publishRabbit(domain)
 			}
 		}
 	} else {
@@ -832,19 +872,13 @@ func (r *Runner) logPrecertInfo(entry *ct.RawLogEntry) {
 				r.actorEngine.Send(r.actorPID, &types.GungnirMessage{Domain: domain})
 			}
 		}
-	} else if r.natsPub {
+	} else if r.rabbitPub {
 		if utils.IsSubdomain(parsedEntry.Precert.TBSCertificate.Subject.CommonName, r.rootDomains) {
-			err := r.natsConn.Publish(r.options.NatsSubject, []byte(parsedEntry.Precert.TBSCertificate.Subject.CommonName))
-			if err != nil {
-				log.Printf("Error writing to NATs: %v", err)
-			}
+			r.publishRabbit(parsedEntry.Precert.TBSCertificate.Subject.CommonName)
 		}
 		for _, domain := range parsedEntry.Precert.TBSCertificate.DNSNames {
 			if utils.IsSubdomain(domain, r.rootDomains) {
-				err := r.natsConn.Publish(r.options.NatsSubject, []byte(domain))
-				if err != nil {
-					log.Printf("Error writing to NATs: %v", err)
-				}
+				r.publishRabbit(domain)
 			}
 		}
 	} else {

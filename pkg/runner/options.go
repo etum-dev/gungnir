@@ -15,9 +15,8 @@ type Options struct {
 	CompactJson  bool
 	WatchFile    bool
 	OutputDir    string
-	NatsSubject  string
-	NatsUrl      string
-	NatsCredFile string
+	RabbitBroker string
+	RabbitQueue  string
 	ActorPID     *actor.PID
 	ActorEngine  *actor.Engine
 }
@@ -32,9 +31,9 @@ func ParseOptions() (*Options, error) {
 	flag.BoolVar(&options.JsonOutput, "j", false, "JSONL output cert info")
 	flag.BoolVar(&options.CompactJson, "cj", true, "JSON matching my workflow")
 	flag.StringVar(&options.OutputDir, "o", "", "Directory to store output files (one per hostname, requires -r flag)")
-	flag.StringVar(&options.NatsSubject, "ns", "", "NATs subject to publish domains to")
-	flag.StringVar(&options.NatsUrl, "nu", "", "NATs URL to publish domains to")
-	flag.StringVar(&options.NatsCredFile, "nc", "", "NATs subject to publish domains to")
+	flag.StringVar(&options.RabbitBroker, "rh", "", "RabbitMQ AMQP URI to publish domains to (e.g. amqp://guest:guest@localhost:5672/)")
+	flag.StringVar(&options.RabbitQueue, "rq", "gungnir", "RabbitMQ queue to publish domains to")
+
 	flag.Parse()
 
 	// Validate that output directory is only used with root list
