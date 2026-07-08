@@ -1,4 +1,5 @@
 echo '*.se' | gungnir -r -          # all .se domains
+This fork makes the data into json and has options for rabbitMQ
 
 # Gungnir
 In Norse mythology, Gungnir is the spear of the god Odin. It is known for always hitting the target of the attacker regardless of the attacker's skill.
@@ -31,9 +32,8 @@ Usage of gungnir:
   -debug  Debug CT logs to see if you are keeping up
   -f      Monitor the root domain file for updates and restart the scan. requires the -r flag
   -j      JSONL output cert info
-  -nc     NATs subject to publish domains to
-  -ns     NATs subject to publish domains to
-  -nu     NATs URL to publish domains to
+  -rh     RabbitMQ AMQP URI to publish domains to (e.g. amqp://guest:guest@localhost:5672/)
+  -rq    RabbitMQ queue to publish domains to
   -o      Directory to store output files (one per hostname, requires -r flag)
   -r      Path to the list of root domains to filter against
   -v      Output go logs (500/429 errors) to command line
